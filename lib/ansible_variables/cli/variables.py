@@ -101,6 +101,22 @@ class VariablesCLI(CLI):
             help="Only check for specific variable",
         )
 
+        self.parser.add_argument(
+            "--check-duplicates",
+            action="store_true",
+            default=None,
+            dest="check_duplicates",
+            help="Check for duplicate variables",
+        )
+
+        self.parser.add_argument(
+            "--remove-duplicates",
+            action="store_true",
+            default=None,
+            dest="remove_duplicates",
+            help="Remove duplicate variables",
+        )
+
     def post_process_args(self, options):
         options = super().post_process_args(options)
 
@@ -115,24 +131,66 @@ class VariablesCLI(CLI):
         # Initialize needed objects
         self.loader, self.inventory, self.vm = self._play_prereqs()
         verbosity = display.verbosity
+        check_duplicates = context.CLIARGS["check_duplicates"]
+        remove_duplicates = context.CLIARGS["remove_duplicates"]
 
-        host = self.inventory.get_host(context.CLIARGS["host"])
-        if not host:
+        hosts = self.inventory.get_hosts(pattern=context.CLIARGS["host"])
+        if not hosts:
             raise AnsibleOptionsError("You must pass a single valid host to ansible-variables")
 
-        for variable in variable_sources(
-            variable_manager=self.vm,
-            host=host,
-            var=context.CLIARGS["variable"],
-        ):
-            if variable.name not in INTERNAL_VARS:
-                rich.print(
-                    f"[bold]{variable.name}[/bold]: {variable.value} - [italic]{variable.source_mapped}[/italic]"
-                )
-                if verbosity >= 1:
-                    files = variable.file_occurrences(loader=self.loader)
-                    for ffile in files:
-                        rich.print(ffile)
+        groups = []
+
+        for host in hosts:
+            host_external_group = host.get_groups()[-1]
+            if host_external_group in groups:
+                continue
+            groups.append(host_external_group)
+
+            rich.print(f"[bold cyan] == {host} | {host_external_group} == [/bold cyan]")
+            for variable in variable_sources(
+                variable_manager=self.vm,
+                host=host,
+                var=context.CLIARGS["variable"],
+            ):
+                if variable.name not in INTERNAL_VARS:
+                    if not check_duplicates:
+                        rich.print(
+                            f"[bold]{variable.name}[/bold]: {variable.value} - [italic]{variable.source_mapped}[/italic]"
+                        )
+                    if verbosity >= 1 or check_duplicates:
+                        files, dups = variable.file_occurrences(loader=self.loader, check_duplicates=check_duplicates)
+                        if verbosity >= 1:
+                            for ffile in files:
+                                rich.print(ffile)
+                        if check_duplicates:
+                            if len(dups) > 1:
+                                rich.print(f"[bold]{variable.name}[/bold]. Originally in: [italic]{dups[0]}[/italic] duplicated in:")
+                                for dup in dups[1:]:
+                                    if remove_duplicates:
+                                        VariablesCLI.delete_var(dup, variable.name + ":")
+                                    rich.print(f"  * [italic]{dup}[/italic]", "[bold red]DELETED[/bold red]" if remove_duplicates else "")
+
+    @staticmethod
+    def delete_var(path: str, var: str):
+        from rich.console import Console
+        console = Console()
+
+        try:
+            with open(path, 'r') as fr:
+                lines = fr.readlines()
+                with open(path, 'w') as fw:
+                    var_found = False
+                    for line in lines:
+                        if var_found:
+                            var_found = line.startswith((' ', '\t'))
+
+                        if line.startswith(var) or var_found:
+                            var_found = True
+                            continue
+
+                        fw.write(line)
+        except Exception:
+            console.print_exception(show_locals=True)
 
 
 def main(args=None):

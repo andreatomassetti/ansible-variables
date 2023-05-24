@@ -76,9 +76,11 @@ class VariableSource:
 
         return files
 
-    def file_occurrences(self, loader: DataLoader):
+    def file_occurrences(self, loader: DataLoader, check_duplicates: bool = False):
         """Open the files and check if the variables occur in it"""
+        import sys
         occurrences = []
+        duplicates_occurrences = []
 
         for ffile in self.files:
             display.vvv("Checking file %s for occurrence of variable %s" % (ffile, self.name))
@@ -88,8 +90,17 @@ class VariableSource:
             content = loader.load_from_file(ffile, unsafe=True)
             if content and self.name in content:
                 occurrences.append(ffile)
+                try:
+                    if check_duplicates:
+                        if content[self.name] == self.value:
+                            duplicates_occurrences.append(ffile)
+                        else:
+                            if duplicates_occurrences:
+                                duplicates_occurrences.clear()
+                except Exception as e:
+                    print(f"ERR!!!!! With {self.name}:", e, file=sys.stderr)
 
-        return occurrences
+        return occurrences, duplicates_occurrences
 
 
 def variable_sources(
